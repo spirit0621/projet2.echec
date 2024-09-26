@@ -1,0 +1,331 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifdef _WIN32
+    #include <conio.h>
+    #include <windows.h>
+#else
+    #include <termios.h>
+    #include <unistd.h>
+
+    int getch(void) {
+        struct termios oldt, newt;
+        int ch;
+        tcgetattr(STDIN_FILENO, &oldt);
+        newt = oldt;
+        newt.c_lflag &= ~(ICANON | ECHO);
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+        ch = getchar();
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        return ch;
+    }
+
+    void SetConsoleTextAttribute(void* handle, int color) {}
+#endif
+
+#define SIZE 8
+
+typedef struct {
+    char type;
+    char color;
+} Piece;
+
+void initBoard(Piece board[SIZE][SIZE]) {
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            board[i][j].type = ' ';
+            board[i][j].color = ' ';
+        }
+    }
+}
+
+void setTextColor(int color) {
+#ifdef _WIN32
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTextAttribute(hConsole, color);
+#endif
+}
+
+void displayBoard(Piece board[SIZE][SIZE]) {
+    system("cls");
+    printf("  a b c d e f g h\n");
+    for (int i = 0; i < SIZE; i++) {
+        printf("%d ", SIZE - i);
+        for (int j = 0; j < SIZE; j++) {
+            char piece = board[i][j].type;
+            if (piece == ' ') {
+                printf(". ");
+            } else {
+                if (board[i][j].color == 'W') {
+                    setTextColor(15);
+                } else {
+                    setTextColor(12);
+                }
+                printf("%c ", piece);
+                setTextColor(7);
+            }
+        }
+        printf("%d\n", SIZE - i);
+    }
+    printf("  a b c d e f g h\n");
+}
+
+void saveGame(Piece board[SIZE][SIZE], const char *filename) {
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        printf("Erreur lors de la sauvegarde de la partie.\n");
+        return;
+    }
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            fprintf(file, "%c%c ", board[i][j].type, board[i][j].color);
+        }
+        fprintf(file, "\n");
+    }
+    fclose(file);
+    printf("Partie sauvegardée dans %s\n", filename);
+}
+
+void loadGame(Piece board[SIZE][SIZE], const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Erreur lors du chargement de la partie.\n");
+        return;
+    }
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (fscanf(file, " %c%c", &board[i][j].type, &board[i][j].color) != 2) {
+                printf("Erreur de format dans le fichier de sauvegarde.\n");
+                fclose(file);
+                return;
+            }
+        }
+    }
+    fclose(file);
+    printf("Partie chargée depuis %s\n", filename);
+}
+
+void initPieces(Piece board[SIZE][SIZE]) {
+    board[0][0] = (Piece){'R', 'B'};
+    board[0][1] = (Piece){'N', 'B'};
+    board[0][2] = (Piece){'B', 'B'};
+    board[0][3] = (Piece){'Q', 'B'};
+    board[0][4] = (Piece){'K', 'B'};
+    board[7][0] = (Piece){'R', 'W'};
+    board[7][1] = (Piece){'N', 'W'};
+    board[7][2] = (Piece){'B', 'W'};
+    board[7][3] = (Piece){'Q', 'W'};
+    board[7][4] = (Piece){'K', 'W'};
+}
+
+int isValidMove(Piece board[SIZE][SIZE], int srcRow, int srcCol, int destRow, int destCol) {
+    if (srcRow < 0 || srcRow >= SIZE || srcCol < 0 || srcCol >= SIZE ||
+        destRow < 0 || destRow >= SIZE || destCol < 0 || destCol >= SIZE) {
+        return 0;
+    }
+    if (board[srcRow][srcCol].type == ' ') {
+        return 0;
+    }
+    if (board[destRow][destCol].color == board[srcRow][srcCol].color) {
+        return 0;
+    }
+
+    switch (board[srcRow][srcCol].type) {
+        case 'R': // Tour
+            return (srcRow == destRow || srcCol == destCol);
+        case 'N': // Chevalier
+            return (abs(srcRow - destRow) == 2 && abs(srcCol - destCol) == 1) ||
+                   (abs(srcRow - destRow) == 1 && abs(srcCol - destCol) == 2);
+        case 'B': // Fou
+            return abs(srcRow - destRow) == abs(srcCol - destCol);
+        case 'Q': // Reine
+            return (srcRow == destRow || srcCol == destCol || abs(srcRow - destRow) == abs(srcCol - destCol));
+        case 'K': // Roi
+            return (abs(srcRow - destRow) <= 1 && abs(srcCol - destCol) <= 1);
+        default:
+            return 0;
+    }
+}
+
+void movePiece(Piece board[SIZE][SIZE], int srcRow, int srcCol, int destRow, int destCol) {
+    if (isValidMove(board, srcRow, srcCol, destRow, destCol)) {
+        board[destRow][destCol] = board[srcRow][srcCol];
+        board[srcRow][srcCol] = (Piece){' ', ' '};
+    } else {
+        printf("Mouvement invalide\n");
+        getch();
+    }
+}
+
+void parsePosition(const char *pos, int *row, int *col) {
+    *col = pos[0] - 'a';
+    *row = SIZE - (pos[1] - '0');
+}
+
+int isInCheck(Piece board[SIZE][SIZE], char color) {
+    int kingRow, kingCol;
+
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (board[i][j].type == 'K' && board[i][j].color == color) {
+                kingRow = i;
+                kingCol = j;
+                break;
+            }
+        }
+    }
+
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (board[i][j].color != color && board[i][j].type != ' ') {
+                if (isValidMove(board, i, j, kingRow, kingCol)) {
+                    return 1; // Roi est en échec
+                }
+            }
+        }
+    }
+    return 0; // Roi n'est pas en échec
+}
+
+int canEscapeCheck(Piece board[SIZE][SIZE], char color) {
+    int kingRow, kingCol;
+
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (board[i][j].type == 'K' && board[i][j].color == color) {
+                kingRow = i;
+                kingCol = j;
+                break;
+            }
+        }
+    }
+
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+            if (i == 0 && j == 0) continue; // Ne pas tester la position actuelle
+            int newRow = kingRow + i;
+            int newCol = kingCol + j;
+
+            if (newRow >= 0 && newRow < SIZE && newCol >= 0 && newCol < SIZE) {
+                Piece temp = board[newRow][newCol];
+                board[newRow][newCol] = board[kingRow][kingCol];
+                board[kingRow][kingCol] = (Piece){' ', ' '};
+
+                if (!isInCheck(board, color)) {
+                    board[kingRow][kingCol] = board[newRow][newCol];
+                    board[newRow][newCol] = temp;
+                    return 1; // Le roi peut échapper à l'échec
+                }
+
+                board[kingRow][kingCol] = board[newRow][newCol];
+                board[newRow][newCol] = temp;
+            }
+        }
+    }
+    return 0; // Le roi ne peut pas échapper à l'échec
+}
+
+int getValidMoves(Piece board[SIZE][SIZE], char color, int *srcRow, int *srcCol, int *destRow, int *destCol) {
+    for (int i = 0; i < SIZE; i++) {
+        for (int j = 0; j < SIZE; j++) {
+            if (board[i][j].color == color) {
+                for (int k = 0; k < SIZE; k++) {
+                    for (int l = 0; l < SIZE; l++) {
+                        if (isValidMove(board, i, j, k, l)) {
+                            *srcRow = i;
+                            *srcCol = j;
+                            *destRow = k;
+                            *destCol = l;
+                            return 1; // Mouvement valide trouvé
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0; // Aucun mouvement valide trouvé
+}
+
+void playGame(Piece board[SIZE][SIZE], int isAgainstAI) {
+    char src[3], dest[3];
+    int srcRow, srcCol, destRow, destCol;
+    int turn = 0;
+
+    while (1) {
+        displayBoard(board);
+        if (isAgainstAI && turn % 2 == 1) {
+            printf("Tour de l'ordinateur (B):\n");
+            if (getValidMoves(board, 'B', &srcRow, &srcCol, &destRow, &destCol)) {
+                movePiece(board, srcRow, srcCol, destRow, destCol);
+                if (isInCheck(board, 'W')) {
+                    printf("Le roi blanc est en échec !\n");
+                }
+            }
+        } else {
+            if (turn % 2 == 0) {
+                printf("Tour du joueur blanc (W):\n");
+            } else {
+                printf("Tour du joueur noir (B):\n");
+            }
+
+            printf("Entrez la position de la pièce à déplacer (e.g., a2) ou 'save' pour sauvegarder, 'load' pour charger: ");
+            scanf("%s", src);
+
+            if (strcmp(src, "save") == 0) {
+                saveGame(board, "saved_game.txt");
+                continue;
+            } else if (strcmp(src, "load") == 0) {
+                loadGame(board, "saved_game.txt");
+                continue;
+            }
+
+            printf("Entrez la destination (e.g., a4): ");
+            scanf("%s", dest);
+
+            parsePosition(src, &srcRow, &srcCol);
+            parsePosition(dest, &destRow, &destCol);
+
+            movePiece(board, srcRow, srcCol, destRow, destCol);
+        }
+
+        if (isInCheck(board, 'W')) {
+            if (!canEscapeCheck(board, 'W')) {
+                printf("Echec et mat ! Le joueur noir a gagné !\n");
+                break;
+            }
+        }
+
+        if (isInCheck(board, 'B')) {
+            if (!canEscapeCheck(board, 'B')) {
+                printf("Echec et mat ! Le joueur blanc a gagné !\n");
+                break;
+            }
+        }
+
+        turn++;
+    }
+}
+
+int main() {
+    Piece board[SIZE][SIZE];
+    int choice;
+
+    printf("Choisissez le mode de jeu:\n1. Jouer contre un autre joueur\n2. Jouer contre l'ordinateur\nChoix: ");
+    scanf("%d", &choice);
+
+    initBoard(board);
+    initPieces(board);
+
+    if (choice == 1) {
+        playGame(board, 0); // Mode joueur contre joueur
+    } else if (choice == 2) {
+        srand(time(NULL));
+        playGame(board, 1); // Mode joueur contre ordinateur
+    } else {
+        printf("Choix invalide.\n");
+    }
+
+    return 0;
+}
